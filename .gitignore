@@ -1,0 +1,24 @@
+# secrets — NEVER commit
+huggingface.txt
+*.token
+.env
+
+# data and model weights (too big / downloaded by the prep command)
+finevideo/
+data/
+*.parquet
+*.pt
+*.engine
+*.onnx
+
+# working outputs (only results.jsonl.gz is submitted)
+parts/
+*.jsonl
+*.tmp
+!ai_chats/*.jsonl
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
