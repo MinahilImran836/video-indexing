@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import HfApi, get_hf_file_metadata, hf_hub_download, hf_hub_url
 
 DATASET = "HuggingFaceFV/finevideo"
 FILE_RE = re.compile(r"^data/train-000[0-4][0-9]-of-01357\.parquet$")  # first 50 files
@@ -41,6 +41,25 @@ def secret(name):
         return os.environ.get(name)
 
 
+def check_tokens(api, read_tok, write_tok):
+    """Say clearly which token works, without printing the tokens."""
+    for label, tok in [("HF_TOKEN_READ", read_tok), ("HF_TOKEN_WRITE", write_tok)]:
+        if not tok:
+            print(f"{label}: NOT FOUND (add it in Add-ons -> Secrets and tick 'attach' for this notebook)")
+            continue
+        try:
+            user = api.whoami(token=tok)["name"]
+        except Exception as e:
+            print(f"{label}: INVALID token ({type(e).__name__})")
+            continue
+        try:  # can this token see the gated dataset files?
+            url = hf_hub_url(DATASET, "data/train-00000-of-01357.parquet", repo_type="dataset")
+            get_hf_file_metadata(url, token=tok)  # HEAD request, no download
+            print(f"{label}: OK (user {user}, FineVideo access OK)")
+        except Exception as e:
+            print(f"{label}: valid (user {user}) but NO FineVideo access ({type(e).__name__})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True, help="your private HF dataset repo, e.g. name/finevideo-results")
@@ -51,8 +70,11 @@ def main():
     args = ap.parse_args()
 
     read_tok = secret("HF_TOKEN_READ")
-    write_tok = secret("HF_TOKEN_WRITE") or read_tok
+    write_tok = secret("HF_TOKEN_WRITE")
     api = HfApi()
+    check_tokens(api, read_tok, write_tok)
+    read_tok = read_tok or write_tok
+    write_tok = write_tok or read_tok
     api.create_repo(args.repo, repo_type="dataset", private=True, exist_ok=True, token=write_tok)
 
     remote = api.list_repo_files(args.repo, repo_type="dataset", token=write_tok)

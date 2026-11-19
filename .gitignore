@@ -22,3 +22,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# editor lock files (LibreOffice lock on huggingface.txt etc.)
+.~lock.*
