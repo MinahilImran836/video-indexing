@@ -21,11 +21,16 @@ How it is fast while staying correct:
 The model settings are the brief's: yolo11l.pt, 640, conf 0.4, class-aware NMS
 IoU 0.7, BGR frames, rotation tag applied (OpenCV auto-orientation).
 """
+import os
+
+# We never plot. Ultralytics imports matplotlib, which crashes if MPLBACKEND points to a
+# backend that isn't installed (e.g. Jupyter's inline backend leaking into a subprocess).
+os.environ["MPLBACKEND"] = "Agg"
+
 import argparse
 import json
 import math
 import multiprocessing as mp
-import os
 import queue
 import sys
 import tempfile

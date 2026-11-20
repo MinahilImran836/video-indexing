@@ -16,10 +16,12 @@ pip install -r requirements.txt
 ## Preparation command (run once, needs internet, not timed)
 
 ```bash
-python -c "from ultralytics import YOLO; YOLO('yolo11l.pt')"
+cd <repository folder>
+MPLBACKEND=Agg python -c "from ultralytics import YOLO; YOLO('yolo11l.pt')"
 ```
 
 This downloads `yolo11l.pt` into the repository folder, where `run.py` looks for it.
+(`MPLBACKEND=Agg` only stops matplotlib from looking for a display; nothing is plotted.)
 
 ## Run
 
