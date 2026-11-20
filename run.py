@@ -109,18 +109,26 @@ def decode_video(wid, vid, data, path, out_q, sample_fps, n_threads):
 
     buf, secs, ts = [], [], []
     filled = set()
+    st = {"decode": 0.0, "convert": 0.0, "letterbox": 0.0, "send": 0.0, "decoded": 0, "kept": 0}
+    clock = time.perf_counter
     t0 = None
     last_sec = -1
 
     def flush():
         if buf:
+            c = clock()
             out_q.put(("frames", wid, vid, np.stack(buf), list(secs), list(ts)))
+            st["send"] += clock() - c   # large = GPU side is the bottleneck (queue full)
             buf.clear(); secs.clear(); ts.clear()
 
     try:
         while True:
-            if not cap.grab():          # decode only, no colour conversion
+            c = clock()
+            ok = cap.grab()             # decode only, no colour conversion
+            st["decode"] += clock() - c
+            if not ok:
                 break
+            st["decoded"] += 1
             t = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
             if t0 is None:
                 t0 = t
@@ -131,10 +139,15 @@ def decode_video(wid, vid, data, path, out_q, sample_fps, n_threads):
             if (sec, slot) in filled:
                 continue
             filled.add((sec, slot))
+            c = clock()
             ok, frame = cap.retrieve()  # BGR, rotated
+            st["convert"] += clock() - c
             if not ok:
                 break
+            c = clock()
             img = letterbox(frame)
+            st["letterbox"] += clock() - c
+            st["kept"] += 1
             if buf and img.shape != buf[0].shape:  # resolution changed mid-video
                 flush()
             buf.append(img); secs.append(sec); ts.append(rel)
@@ -143,10 +156,12 @@ def decode_video(wid, vid, data, path, out_q, sample_fps, n_threads):
         flush()
     except Exception as e:
         flush()
+        out_q.put(("stats", wid, vid, st))
         out_q.put(("error", wid, vid, f"failed partway: {type(e).__name__}", last_sec))
         return
     finally:
         cap.release()
+    out_q.put(("stats", wid, vid, st))
 
     if last_sec < 0:
         out_q.put(("error", wid, vid, "could not decode video", -1))
@@ -307,6 +322,8 @@ def main():
     reader_done = False
     idle_since = None
     n_frames = 0
+    prof = {"gpu": 0.0, "wait": 0.0}                 # main process
+    dec = {"decode": 0.0, "convert": 0.0, "letterbox": 0.0, "send": 0.0, "decoded": 0, "kept": 0}
 
     def state(vid):
         return videos.setdefault(vid, {"per_sec": {}, "frames": [], "max_sec": -1, "t": time.time()})
@@ -335,10 +352,12 @@ def main():
         while True:
             if reader_done and finished >= submitted:
                 break
+            c = time.perf_counter()
             try:
                 msg = out_q.get(timeout=1.0)
             except queue.Empty:
                 msg = None
+            prof["wait"] += time.perf_counter() - c   # large = decoders are the bottleneck
 
             if msg is None:
                 now = time.time()
@@ -365,6 +384,10 @@ def main():
                 continue
 
             kind = msg[0]
+            if kind == "stats":
+                for k, v in msg[3].items():
+                    dec[k] += v
+                continue
             if kind in ("frames", "done", "error") and msg[2] in finished:
                 continue  # late message from a decoder we already gave up on
             if kind == "lines":
@@ -378,7 +401,9 @@ def main():
             elif kind == "frames":
                 _, w, vid, batch, secs, ts = msg
                 last_msg[w] = time.time()
+                c = time.perf_counter()
                 counts = detector(batch)
+                prof["gpu"] += time.perf_counter() - c
                 n_frames += len(counts)
                 st = state(vid)
                 for s, t, c in zip(secs, ts, counts):
@@ -410,6 +435,15 @@ def main():
     el = time.time() - start
     log(f"done: {len(finished)} videos, {n_frames} frames through the model in {el:.1f}s "
         f"({n_frames / max(el, 1e-9):.1f} frames/s)")
+    # --- where the time goes ---
+    log(f"[profile] main process: model {prof['gpu']:.1f}s, waiting for frames {prof['wait']:.1f}s, "
+        f"other {el - prof['gpu'] - prof['wait']:.1f}s (wall {el:.1f}s)")
+    tot = sum(dec[k] for k in ("decode", "convert", "letterbox", "send"))
+    log(f"[profile] decoders (summed over {n_workers}): decode {dec['decode']:.1f}s, "
+        f"convert {dec['convert']:.1f}s, letterbox {dec['letterbox']:.1f}s, "
+        f"blocked sending {dec['send']:.1f}s; {dec['decoded']} frames decoded "
+        f"({dec['decoded'] / max(dec['decode'], 1e-9):.0f}/s per decoder), {dec['kept']} kept; "
+        f"busy {tot / max(el * n_workers, 1e-9) * 100:.0f}% of decoder time")
 
 
 if __name__ == "__main__":
