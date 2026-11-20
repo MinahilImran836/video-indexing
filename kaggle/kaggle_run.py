@@ -65,9 +65,16 @@ def main():
     ap.add_argument("--repo", required=True, help="your private HF dataset repo, e.g. name/finevideo-results")
     ap.add_argument("--tag", required=True, help="folder in the repo for this version, e.g. baseline / final")
     ap.add_argument("--files", type=int, default=50, help="how many of the 50 files to do")
+    ap.add_argument("--file-indices", default=None, help="only these of the 50 files, e.g. 25,49")
+    ap.add_argument("--script", default="run.py", help="script to run, e.g. tools/baseline_run.py")
     ap.add_argument("--run-args", default="", help="extra args for run.py")
     ap.add_argument("--merge", action="store_true", help="download all parts and build results.jsonl.gz")
     args = ap.parse_args()
+
+    # protect the reference results: "baseline*" folders may only be written by the baseline script
+    if args.tag.startswith("baseline") != (args.script == "tools/baseline_run.py"):
+        sys.exit(f"refusing: tag '{args.tag}' with script '{args.script}'. Use a tag starting with "
+                 "'baseline' only together with --script tools/baseline_run.py (and vice versa).")
 
     read_tok = secret("HF_TOKEN_READ")
     write_tok = secret("HF_TOKEN_WRITE")
@@ -81,7 +88,11 @@ def main():
     done = {Path(f).stem for f in remote if f.startswith(f"{args.tag}/parts/") and f.endswith(".jsonl")}
 
     files = sorted(f for f in api.list_repo_files(DATASET, repo_type="dataset", token=read_tok)
-                   if FILE_RE.match(f))[: args.files]
+                   if FILE_RE.match(f))
+    if args.file_indices:
+        files = [files[int(i)] for i in args.file_indices.split(",")]
+    else:
+        files = files[: args.files]
 
     if args.merge:
         return merge(api, args, files, write_tok)
@@ -101,7 +112,7 @@ def main():
         t_dl = time.time() - t_dl
 
         tmp_out = out_dir / f"{stem}.jsonl.tmp"
-        cmd = [sys.executable, str(REPO_DIR / "run.py"), "--input", str(in_dir), "--output", str(tmp_out)]
+        cmd = [sys.executable, str(REPO_DIR / args.script), "--input", str(in_dir), "--output", str(tmp_out)]
         extra = args.run_args.split()
         if "--dump-frames" in extra:  # give it a path
             extra.remove("--dump-frames")
